@@ -111,6 +111,7 @@
 
     <div id="receiver" class="hidden">
         <h2>Receiver</h2>
+        <p>In VR mode, click/trigger to recenter the screen.</p>
         <video id="remoteVideo" autoplay playsinline></video>
         <h3>1. Paste Sender's Offer:</h3>
         <textarea id="offerSdpInput"></textarea>
@@ -123,7 +124,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
         // --- WebXR Polyfill ---
-        // This is a basic polyfill to ensure the app can run in browsers with older WebXR implementations.
         if (navigator.xr === undefined) {
             if (window.VRDevice) {
                 navigator.xr = new VRDevice();
@@ -136,17 +136,13 @@
         const selectionDiv = document.getElementById('selection');
         const senderDiv = document.getElementById('sender');
         const receiverDiv = document.getElementById('receiver');
-
         const sendButton = document.getElementById('sendButton');
         const receiveButton = document.getElementById('receiveButton');
-
         const localVideo = document.getElementById('localVideo');
         const remoteVideo = document.getElementById('remoteVideo');
-
         const offerSdpTextarea = document.getElementById('offerSdp');
         const answerSdpTextarea = document.getElementById('answerSdp');
         const setAnswerButton = document.getElementById('setAnswerButton');
-
         const offerSdpInputTextarea = document.getElementById('offerSdpInput');
         const createAnswerButton = document.getElementById('createAnswerButton');
         const answerSdpOutputTextarea = document.getElementById('answerSdpOutput');
@@ -162,30 +158,20 @@
         sendButton.onclick = async () => {
             selectionDiv.classList.add('hidden');
             senderDiv.classList.remove('hidden');
-
             try {
-                // Try to get the display media (screen share)
                 const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
                 localVideo.srcObject = stream;
-
                 peerConnection = new RTCPeerConnection(configuration);
                 stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
-
                 peerConnection.onicecandidate = event => {
                     if (event.candidate) {
-                        // For this simple manual setup, we'll wait for the full offer description.
-                        // A more advanced implementation would use a signaling server to exchange candidates.
                         offerSdpTextarea.value = JSON.stringify(peerConnection.localDescription);
                     }
                 };
-
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
-
                 offerSdpTextarea.value = JSON.stringify(peerConnection.localDescription);
-
             } catch (err) {
-                // Catch and handle errors, like permission denied.
                 console.error("Error starting screen share:", err);
                 const errorMsg = document.createElement('p');
                 errorMsg.style.color = '#ff6b6b';
@@ -224,27 +210,21 @@
             }
             try {
                 peerConnection = new RTCPeerConnection(configuration);
-
                 peerConnection.ontrack = event => {
                     if (remoteVideo.srcObject !== event.streams[0]) {
                         remoteVideo.srcObject = event.streams[0];
                         console.log('Receiver: received remote stream');
                     }
                 };
-                
                 peerConnection.onicecandidate = event => {
                     if (event.candidate) {
-                        // Similar to the sender, we wait for the full answer description.
                         answerSdpOutputTextarea.value = JSON.stringify(peerConnection.localDescription);
                     }
                 };
-
                 const offer = JSON.parse(offerSdpInputTextarea.value);
                 await peerConnection.setRemoteDescription(offer);
-
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
-
                 answerSdpOutputTextarea.value = JSON.stringify(peerConnection.localDescription);
                 createAnswerButton.disabled = true;
             } catch(err) {
@@ -259,36 +239,30 @@
 
             function init() {
                 scene = new THREE.Scene();
-                // Use a black background for better immersion
                 scene.background = new THREE.Color(0x000000);
-
                 camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-                // Start position inside the "VR space"
-                camera.position.set(0, 0, 1.5);
-
-                // The video texture will be created from the remote video element
+                
                 videoTexture = new THREE.VideoTexture(remoteVideo);
                 const material = new THREE.MeshBasicMaterial({ map: videoTexture });
                 
-                // Create a plane to display the video, with a 16:9 aspect ratio
-                const geometry = new THREE.PlaneGeometry(3.2, 1.8); 
+                // --- CHANGE: Made the monitor larger (4.8 x 2.7) ---
+                const geometry = new THREE.PlaneGeometry(4.8, 2.7); 
                 plane = new THREE.Mesh(geometry, material);
-                // Position the plane in front of the camera's starting point
-                plane.position.set(0, 0, -1);
                 scene.add(plane);
 
-                renderer = new THREE.WebGLRenderer({ antialias: true });
+                // Initial position of the screen
+                recenterScreen(false); // Position on init without needing to be in VR
+
+                renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
                 renderer.setSize(window.innerWidth, window.innerHeight);
                 renderer.xr.enabled = true;
                 
-                // Simple VR button
                 const vrButton = document.createElement('button');
                 vrButton.textContent = 'Enter VR';
                 vrButton.onclick = () => {
                     if (renderer.xr.isPresenting) {
                         renderer.xr.getSession().end();
                     } else {
-                        // Request an immersive VR session
                         navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] }).then(session => {
                            renderer.xr.setSession(session);
                         }).catch(err => {
@@ -302,15 +276,45 @@
                 };
                 vrButtonContainer.appendChild(vrButton);
 
+                // --- CHANGE: Added click listener for recentering ---
+                renderer.domElement.addEventListener('click', () => recenterScreen(true));
 
                 renderer.setAnimationLoop(render);
+
+                window.addEventListener('resize', onWindowResize, false);
+            }
+
+            function onWindowResize() {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            // --- CHANGE: New function to handle recentering ---
+            function recenterScreen(checkVRPresenting) {
+                // If checkVRPresenting is true, only recenter if in VR. Otherwise, recenter anyway (for init).
+                if (checkVRPresenting && !renderer.xr.isPresenting) {
+                    return;
+                }
+                
+                // Distance of the screen from the user
+                const distanceFromUser = 3; 
+
+                // Get camera's direction
+                const direction = new THREE.Vector3();
+                camera.getWorldDirection(direction);
+
+                // Position the plane in front of the camera
+                plane.position.copy(camera.position).add(direction.multiplyScalar(distanceFromUser));
+                
+                // Make the plane's front face the camera's position
+                plane.lookAt(camera.position);
             }
 
             function render() {
                 renderer.render(scene, camera);
             }
             
-            // Check for WebXR support
             if ('xr' in navigator) {
                 navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
                     if (supported) {
@@ -327,7 +331,6 @@
                 receiverDiv.appendChild(message);
             }
         }
-
     </script>
 </body>
 </html>
