@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebXR Screen Share</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            text-align: center;
+        }
+
+        h1 {
+            color: #ffffff;
+            margin-bottom: 2rem;
+        }
+
+        #selection, #sender, #receiver {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+            background-color: #1e1e1e;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            width: 90%;
+            max-width: 500px;
+        }
+
+        button {
+            background-color: #03dac6;
+            color: #000000;
+            border: none;
+            padding: 1rem 2rem;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #018786;
+        }
+        
+        button:disabled {
+            background-color: #333;
+            color: #888;
+            cursor: not-allowed;
+        }
+
+        video {
+            border-radius: 0.5rem;
+            background-color: #000;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 100px;
+            background-color: #2c2c2c;
+            border: 1px solid #444;
+            color: #e0e0e0;
+            border-radius: 0.5rem;
+            padding: 0.5rem;
+            font-family: monospace;
+            box-sizing: border-box;
+        }
+        
+        .hidden {
+            display: none;
+        }
+
+        p {
+            max-width: 100%;
+            word-wrap: break-word;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <h1>WebXR Screen Share</h1>
+
+    <div id="selection">
+        <h2>Choose your role:</h2>
+        <button id="sendButton">Send Screen</button>
+        <button id="receiveButton">Receive Screen</button>
+    </div>
+
+    <div id="sender" class="hidden">
+        <h2>Sender</h2>
+        <video id="localVideo" autoplay muted playsinline></video>
+        <h3>1. Your Offer:</h3>
+        <textarea id="offerSdp" readonly></textarea>
+        <h3>2. Paste Receiver's Answer:</h3>
+        <textarea id="answerSdp"></textarea>
+        <button id="setAnswerButton">Connect</button>
+    </div>
+
+    <div id="receiver" class="hidden">
+        <h2>Receiver</h2>
+        <video id="remoteVideo" autoplay playsinline></video>
+        <h3>1. Paste Sender's Offer:</h3>
+        <textarea id="offerSdpInput"></textarea>
+        <button id="createAnswerButton">Create Answer</button>
+        <h3>2. Your Answer:</h3>
+        <textarea id="answerSdpOutput" readonly></textarea>
+        <div id="vr-button-container"></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // --- WebXR Polyfill ---
+        // This is a basic polyfill to ensure the app can run in browsers with older WebXR implementations.
+        if (navigator.xr === undefined) {
+            if (window.VRDevice) {
+                navigator.xr = new VRDevice();
+            } else if (window.WebVRDevice) {
+                navigator.xr = new WebVRDevice();
+            }
+        }
+
+        // --- DOM Elements ---
+        const selectionDiv = document.getElementById('selection');
+        const senderDiv = document.getElementById('sender');
+        const receiverDiv = document.getElementById('receiver');
+
+        const sendButton = document.getElementById('sendButton');
+        const receiveButton = document.getElementById('receiveButton');
+
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+
+        const offerSdpTextarea = document.getElementById('offerSdp');
+        const answerSdpTextarea = document.getElementById('answerSdp');
+        const setAnswerButton = document.getElementById('setAnswerButton');
+
+        const offerSdpInputTextarea = document.getElementById('offerSdpInput');
+        const createAnswerButton = document.getElementById('createAnswerButton');
+        const answerSdpOutputTextarea = document.getElementById('answerSdpOutput');
+        const vrButtonContainer = document.getElementById('vr-button-container');
+
+        // --- WebRTC Configuration ---
+        const configuration = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
+        let peerConnection;
+        
+        // --- Sender Logic ---
+        sendButton.onclick = async () => {
+            selectionDiv.classList.add('hidden');
+            senderDiv.classList.remove('hidden');
+
+            try {
+                // Try to get the display media (screen share)
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                localVideo.srcObject = stream;
+
+                peerConnection = new RTCPeerConnection(configuration);
+                stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        // For this simple manual setup, we'll wait for the full offer description.
+                        // A more advanced implementation would use a signaling server to exchange candidates.
+                        offerSdpTextarea.value = JSON.stringify(peerConnection.localDescription);
+                    }
+                };
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                offerSdpTextarea.value = JSON.stringify(peerConnection.localDescription);
+
+            } catch (err) {
+                // Catch and handle errors, like permission denied.
+                console.error("Error starting screen share:", err);
+                const errorMsg = document.createElement('p');
+                errorMsg.style.color = '#ff6b6b';
+                errorMsg.textContent = `Error: Could not start screen share. The browser reported: "${err.message}". This is often caused by a permissions policy blocking screen capture in this environment (e.g., inside an iframe). Try running this in a new, standalone browser tab.`;
+                senderDiv.prepend(errorMsg);
+            }
+        };
+
+        setAnswerButton.onclick = async () => {
+            if (!answerSdpTextarea.value) {
+                alert("Please paste the receiver's answer first.");
+                return;
+            }
+            try {
+                const answer = JSON.parse(answerSdpTextarea.value);
+                await peerConnection.setRemoteDescription(answer);
+                setAnswerButton.disabled = true;
+                setAnswerButton.textContent = "Connected";
+            } catch (err) {
+                console.error("Failed to set remote description:", err);
+                alert("Failed to connect. The answer SDP might be invalid.");
+            }
+        };
+        
+        // --- Receiver Logic ---
+        receiveButton.onclick = () => {
+            selectionDiv.classList.add('hidden');
+            receiverDiv.classList.remove('hidden');
+            setupXR();
+        };
+
+        createAnswerButton.onclick = async () => {
+            if (!offerSdpInputTextarea.value) {
+                alert("Please paste the sender's offer first.");
+                return;
+            }
+            try {
+                peerConnection = new RTCPeerConnection(configuration);
+
+                peerConnection.ontrack = event => {
+                    if (remoteVideo.srcObject !== event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
+                        console.log('Receiver: received remote stream');
+                    }
+                };
+                
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        // Similar to the sender, we wait for the full answer description.
+                        answerSdpOutputTextarea.value = JSON.stringify(peerConnection.localDescription);
+                    }
+                };
+
+                const offer = JSON.parse(offerSdpInputTextarea.value);
+                await peerConnection.setRemoteDescription(offer);
+
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                answerSdpOutputTextarea.value = JSON.stringify(peerConnection.localDescription);
+                createAnswerButton.disabled = true;
+            } catch(err) {
+                console.error("Failed to create answer:", err);
+                alert("Failed to create an answer. The offer SDP might be invalid.");
+            }
+        };
+        
+        // --- WebXR Logic (for Receiver) ---
+        function setupXR() {
+            let scene, camera, renderer, videoTexture, plane;
+
+            function init() {
+                scene = new THREE.Scene();
+                // Use a black background for better immersion
+                scene.background = new THREE.Color(0x000000);
+
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                // Start position inside the "VR space"
+                camera.position.set(0, 0, 1.5);
+
+                // The video texture will be created from the remote video element
+                videoTexture = new THREE.VideoTexture(remoteVideo);
+                const material = new THREE.MeshBasicMaterial({ map: videoTexture });
+                
+                // Create a plane to display the video, with a 16:9 aspect ratio
+                const geometry = new THREE.PlaneGeometry(3.2, 1.8); 
+                plane = new THREE.Mesh(geometry, material);
+                // Position the plane in front of the camera's starting point
+                plane.position.set(0, 0, -1);
+                scene.add(plane);
+
+                renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.xr.enabled = true;
+                
+                // Simple VR button
+                const vrButton = document.createElement('button');
+                vrButton.textContent = 'Enter VR';
+                vrButton.onclick = () => {
+                    if (renderer.xr.isPresenting) {
+                        renderer.xr.getSession().end();
+                    } else {
+                        // Request an immersive VR session
+                        navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] }).then(session => {
+                           renderer.xr.setSession(session);
+                        }).catch(err => {
+                            console.error("Failed to start VR session", err);
+                            const errorMsg = document.createElement('p');
+                            errorMsg.style.color = '#ff6b6b';
+                            errorMsg.textContent = `Error: Could not enter VR mode. ${err.message}`;
+                            vrButtonContainer.appendChild(errorMsg);
+                        });
+                    }
+                };
+                vrButtonContainer.appendChild(vrButton);
+
+
+                renderer.setAnimationLoop(render);
+            }
+
+            function render() {
+                renderer.render(scene, camera);
+            }
+            
+            // Check for WebXR support
+            if ('xr' in navigator) {
+                navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+                    if (supported) {
+                        init();
+                    } else {
+                        const message = document.createElement('p');
+                        message.textContent = "Immersive VR not supported on this device.";
+                        receiverDiv.appendChild(message);
+                    }
+                });
+            } else {
+                const message = document.createElement('p');
+                message.textContent = "WebXR API not available in this browser.";
+                receiverDiv.appendChild(message);
+            }
+        }
+
+    </script>
+</body>
+</html>
